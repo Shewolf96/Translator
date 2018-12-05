@@ -116,11 +116,13 @@ module Make() = struct
     let i32_0 = Int32.of_int 0
     let i32_1 = Int32.of_int 1
 
-    let add_instr tag r lhs rhs = 
+    let add_instr_aux tag r lhs rhs = 
       match Hashtbl.find node2type tag with
       | TP_Int -> I_Add (r, lhs, rhs)
       | TP_Array _ -> I_Concat (r, lhs, rhs)
-      | _ -> failwith "Typecheker error - '+' only applied to int or array"
+      | _ -> failwith "Typecheker error - '+' can only be applied to int or array"
+
+
 
     (* --------------------------------------------------- *)
     let rec translate_expression env current_bb = function
@@ -140,8 +142,8 @@ module Make() = struct
 
       | Ast.EXPR_String {value; _} -> 
         let r = allocate_register () in
-        append_instruction current_bb 
-            (I_NewArray (r, E_Int (Int32.of_int (String.length value))));
+        append_instruction current_bb @@
+            I_NewArray (r, E_Int (Int32.of_int (String.length value)));
         String.iteri (fun i v -> 
             append_instruction current_bb 
             (I_StoreArray (E_Reg r, E_Int (Int32.of_int i), 
@@ -195,30 +197,119 @@ module Make() = struct
         let r = allocate_register () in
         let current_bb, res_lhs = translate_expression env current_bb lhs in
         let current_bb, res_rhs = translate_expression env current_bb rhs in
-        append_instruction current_bb @@ add_instr tag r res_lhs res_rhs;
+        append_instruction current_bb @@ add_instr_aux tag r res_lhs res_rhs;
         current_bb, E_Reg r
 
       | Ast.EXPR_Binop {lhs; rhs; op=(Ast.BINOP_Or | Ast.BINOP_And); _} as e ->
         let r = allocate_register () in
-        let bb_false = allocate_block () in 
-        let bb_true = translate_condition env current_bb bb_false e in
-        let bb_merge = allocate_block () in
-        append_instruction bb_false @@ I_Move (r, E_Int i32_0);
-        append_instruction bb_true @@ I_Move (r, E_Int i32_1);
-        set_jump bb_true bb_merge;
-        set_jump bb_false bb_merge;
-        bb_merge, E_Reg r
+        let false_bb = allocate_block () in 
+        let true_bb = translate_condition env current_bb false_bb e in
+        let merge_bb = allocate_block () in
+        append_instruction false_bb @@ I_Move (r, E_Int i32_0);
+        append_instruction true_bb @@ I_Move (r, E_Int i32_1);
+        set_jump true_bb merge_bb;
+        set_jump false_bb merge_bb;
+        merge_bb, E_Reg r
+
+        (* koniec binopow chyba *)
+
+      | Ast.EXPR_Unop {op=Ast.UNOP_Not; sub; _} ->
+        let r = allocate_register () in
+        let current_bb, e = translate_expression env current_bb sub in
+        append_instruction current_bb @@ I_Not (r, e);
+        current_bb, E_Reg r
+
+      | Ast.EXPR_Unop {op=Ast.UNOP_Neg; sub; _} ->
+        let r = allocate_register () in
+        let current_bb, e = translate_expression env current_bb sub in
+        append_instruction current_bb @@ I_Neg (r, e);
+        current_bb, E_Reg r
+
+        (* EXPR_Relation *)
+        (* to wszystko jest zle :< *)
+        (* jak napiszemy poprawnie AND i OR w translate_condition to do poprawki *)
+
+      | Ast.EXPR_Relation {op=Ast.RELOP_Eq; lhs; rhs; _} ->
+        let r = allocate_register () in
+        let curr_bb, e1 = translate_expression env current_bb lhs in
+        let curr_bb, e2 = translate_expression env current_bb rhs in
+        append_instruction curr_bb @@ I_Set (r, COND_Eq,  e1, e2);
+        curr_bb, E_Reg r
+
+      | Ast.EXPR_Relation {op=Ast.RELOP_Ne; lhs; rhs; _} ->
+        let r = allocate_register () in
+        let curr_bb, e1 = translate_expression env current_bb lhs in
+        let curr_bb, e2 = translate_expression env current_bb rhs in
+        append_instruction curr_bb @@ I_Set (r, COND_Ne,  e1, e2);
+        curr_bb, E_Reg r
+
+      | Ast.EXPR_Relation {op=Ast.RELOP_Lt; lhs; rhs; _} ->
+        let r = allocate_register () in
+        let curr_bb, e1 = translate_expression env current_bb lhs in
+        let curr_bb, e2 = translate_expression env current_bb rhs in
+        append_instruction curr_bb @@ I_Set (r, COND_Lt,  e1, e2);
+        curr_bb, E_Reg r
+
+      | Ast.EXPR_Relation {op=Ast.RELOP_Gt; lhs; rhs; _} ->
+        let r = allocate_register () in
+        let curr_bb, e1 = translate_expression env current_bb lhs in
+        let curr_bb, e2 = translate_expression env current_bb rhs in
+        append_instruction curr_bb @@ I_Set (r, COND_Gt,  e1, e2);
+        curr_bb, E_Reg r
+
+      | Ast.EXPR_Relation {op=Ast.RELOP_Le; lhs; rhs; _} ->
+        let r = allocate_register () in
+        let curr_bb, e1 = translate_expression env current_bb lhs in
+        let curr_bb, e2 = translate_expression env current_bb rhs in
+        append_instruction curr_bb @@ I_Set (r, COND_Le,  e1, e2);
+        curr_bb, E_Reg r
+
+      | Ast.EXPR_Relation {op=Ast.RELOP_Ge; lhs; rhs; _} ->
+        let r = allocate_register () in
+        let curr_bb, e1 = translate_expression env current_bb lhs in
+        let curr_bb, e2 = translate_expression env current_bb rhs in
+        append_instruction curr_bb @@ I_Set (r, COND_Ge,  e1, e2);
+        curr_bb, E_Reg r
+
+      (* kooniec EXPR_Relation *)
+
+      | Ast.EXPR_Call Call {callee; arguments; _} -> 
+        let p = Environment.lookup_proc callee env in
+        let aux (bb, l) expr = 
+          let new_bb, e = translate_expression env bb expr 
+          in new_bb, e::l 
+        in let current_bb, xs = List.fold_left aux (current_bb, []) arguments in
+        let rs = allocate_register () in
+        append_instruction current_bb @@ I_Call ([rs], p, List.rev xs, []);
+        current_bb, E_Reg rs
 
 
-        (* Czy ten or i and maja tak tez wygladac? *)
-        (* i teraz cos z add madrego trzeba  *)
+      | Ast.EXPR_Struct {elements; _} -> 
+        let r = allocate_register () in
+        append_instruction current_bb @@ I_NewArray (r, E_Int (Int32.of_int (List.length elements)));
+        let aux (bb, l) expr = 
+          let new_bb, e = translate_expression env bb expr 
+          in new_bb, e::l
+        in let current_bb, expr_list = List.fold_left aux (current_bb, []) elements in
+        List.iteri (fun i e -> 
+            append_instruction current_bb @@
+            I_StoreArray (E_Reg r, E_Int (Int32.of_int i), e)) (List.rev expr_list);
+        current_bb, E_Reg r
 
+  (*   and translate_expr_list (bb, l) expr = 
+      let new_bb, e = translate_expression env bb expr 
+      in new_bb, e::l *)
+    and translate_lvalue env current_bb e_reg = function
+      | Ast.LVALUE_Id {id; _} -> 
+        let r = E_Reg (Environment.lookup_var id env) in
+        append_instruction current_bb @@ I_StoreMem (r, E_Int i32_0, e_reg);
+        env, current_bb
 
-
-
-
-      | _ ->
-        failwith "not yet implemented"
+      | Ast.LVALUE_Index {sub; index; _} ->
+        let current_bb, i = translate_expression env current_bb index in
+        let current_bb, xs = translate_expression env current_bb sub in
+        append_instruction current_bb @@ I_StoreArray (xs, i, e_reg);
+        env, current_bb
 
     (* --------------------------------------------------- *)
     and translate_condition env current_bb else_bb = function 
@@ -231,8 +322,23 @@ module Make() = struct
 
       (* Zaimplementuj dodatkowe przypadki *)
 
-      (*to chcemy dla OR i AND zrobic na pewno*)
-      (* | Ast.EXPR_Binop {lhs; rhs; op=Ast.BINOP_Or; _} *)
+      | Ast.EXPR_Binop {lhs; rhs; op=Ast.BINOP_Or; _} ->
+        let curr_bb, res_lhs = translate_expression env current_bb lhs in
+        let next_bb = allocate_block () in
+        let not_yet_bb = allocate_block () in
+        set_branch COND_Ne res_lhs (E_Int i32_0) curr_bb next_bb not_yet_bb;
+        let not_yet_bb, res_rhs = translate_expression env not_yet_bb rhs in
+        set_branch COND_Ne res_rhs (E_Int i32_0) not_yet_bb next_bb else_bb;
+        next_bb 
+
+      | Ast.EXPR_Binop {lhs; rhs; op=Ast.BINOP_And; _} ->
+        let curr_bb, res_lhs = translate_expression env current_bb lhs in
+        let next_bb = allocate_block () in
+        let not_yet_bb = allocate_block () in
+        set_branch COND_Ne res_lhs (E_Int i32_0) curr_bb not_yet_bb else_bb;
+        let not_yet_bb, res_rhs = translate_expression env not_yet_bb rhs in
+        set_branch COND_Ne res_rhs (E_Int i32_0) not_yet_bb next_bb else_bb;
+        next_bb 
 
       | e ->
         let current_bb, res = translate_expression env current_bb e in
@@ -244,12 +350,68 @@ module Make() = struct
     (* --------------------------------------------------- *)
 
     let rec translate_statement env current_bb = function
+
+      | Ast.STMT_Return {values; _} ->
+        let aux (bb, l) expr = 
+          let new_bb, e = translate_expression env bb expr 
+          in new_bb, e::l
+        in let current_bb, expr_list = List.fold_left aux (current_bb, []) values in
+        set_return current_bb expr_list;
+        env, current_bb
+
+      | Ast.STMT_Block stmt_block ->
+        translate_block env current_bb stmt_block
+
+      | Ast.STMT_If {cond; then_branch; else_branch; _} ->
+        let else_bb = allocate_block () in
+        let current_bb = translate_condition env current_bb else_bb cond in
+        let env, current_bb = translate_statement env current_bb then_branch in
+        let merge_bb = allocate_block () in
+        (* czy mam tu dodawac jakies instrukcje??? *)
+        set_jump current_bb merge_bb;
+        begin match else_branch with
+          | None -> 
+            set_jump else_bb merge_bb; 
+            env, merge_bb (* tu tez jest jakis problem z tym env :c 
+            W sensie ze jesli cond=false to nie powinnam zwracac env zmienionego przez then_branch O.o *)
+
+          | Some else_branch ->
+            let env, else_bb = translate_statement env else_bb else_branch in
+            set_jump else_bb merge_bb;
+            env, merge_bb
+        end
+
+      | Ast.STMT_While {cond; body; _} as stmt_while -> 
+        let false_bb = allocate_block () in
+        let current_bb = translate_condition env current_bb false_bb cond in
+        let env, current_bb = translate_statement env current_bb body in 
+        let env, current_bb = translate_statement env current_bb stmt_while in
+        let merge_bb = allocate_block () in
+        set_jump current_bb merge_bb;
+        set_jump false_bb merge_bb;
+        env, merge_bb (*testy nie przechodza, czyli jest zleeee*)
+
+      | Ast.STMT_Call Call {callee; arguments; _} ->
+        let p = Environment.lookup_proc callee env in
+        let aux (bb, l) expr = 
+          let new_bb, e = translate_expression env bb expr 
+          in new_bb, e::l 
+        in let current_bb, xs = List.fold_left aux (current_bb, []) arguments in
+        append_instruction current_bb @@ I_Call ([], p, List.rev xs, []);
+        env, current_bb
+
+      | Ast.STMT_Assign {lhs; rhs; _} ->
+        let current_bb, res_rhs = translate_expression env current_bb rhs in
+        translate_lvalue env current_bb res_rhs lhs  
+
+
       | _ ->
         failwith "not yet implemented"
 
 
     and translate_block env current_bb (Ast.STMTBlock {body; _}) =
-      failwith "not yet implemented"
+      List.fold_left (fun (env, bb) st -> translate_statement env bb st) 
+        (env, current_bb) body
 
     let bind_var_declaration env vardecl =
       let r = allocate_register () in
