@@ -302,9 +302,9 @@ module Make() = struct
 
 
     and translate_lvalue env current_bb e_reg = function
-      | Ast.LVALUE_Id {id; _} -> 
-        let r = E_Reg (Environment.lookup_var id env) in
-        append_instruction current_bb @@ I_StoreMem (r, E_Int i32_0, e_reg);
+      | Ast.LVALUE_Id {id; _} ->
+        let r = Environment.lookup_var id env in
+        append_instruction current_bb @@ I_Move (r, e_reg);
         env, current_bb
 
       | Ast.LVALUE_Index {sub; index; _} ->
@@ -383,15 +383,15 @@ module Make() = struct
             env, merge_bb
         end
 
-      | Ast.STMT_While {cond; body; _} as stmt_while -> 
+      | Ast.STMT_While {cond; body; _} -> 
         let false_bb = allocate_block () in
-        let current_bb = translate_condition env current_bb false_bb cond in
-        let env, current_bb = translate_statement env current_bb body in 
-        let env, current_bb = translate_statement env current_bb stmt_while in
-        let merge_bb = allocate_block () in
-        set_jump current_bb merge_bb;
-        set_jump false_bb merge_bb;
-        env, merge_bb (*testy nie przechodza, czyli jest zleeee*)
+        let bbb = allocate_block () in
+        set_jump current_bb bbb;
+        let cbb = translate_condition env bbb false_bb cond in
+        let _, cbb = translate_statement env cbb body in
+        (* return in cbb? *)
+        set_jump cbb bbb;
+        env, false_bb (*testy nie przechodza, czyli jest zleeee*)
 
       | Ast.STMT_Call Call {callee; arguments; _} ->
         let p = Environment.lookup_proc callee env in
@@ -409,25 +409,52 @@ module Make() = struct
       | Ast.STMT_VarDecl {var; init; _} ->
         let id = Ast.identifier_of_var_declaration var in
         let tp = Ast.type_expression_of_var_declaration var in
-        begin match tp with
-        | Ast.TEXPR_Int _
+        let r = allocate_register () in
+        let env = Environment.add_var id r env in
         
-        | Ast.TEXPR_Bool _ ->
-          let r = allocate_register () in
-          let env = Environment.add_var id r env in
-          begin match init with
-          | None -> env, current_bb
-
-          | Some e -> 
-            let current_bb, res_init = translate_expression env current_bb e in
-            append_instruction current_bb @@ I_Move (r, res_init);
-            env, current_bb
+        let rec allocate_array dim bb = 
+          match dim with
+          | None ->
+            bb
+          | Some dim ->
+            let bb, i = translate_expression env bb dim in
+            append_instruction bb @@ I_NewArray (r, i);
+            bb
+        in
+        let current_bb = 
+          begin match tp with
+          | Ast.TEXPR_Array {sub; dim; _} -> allocate_array dim current_bb
+          | _ -> current_bb
           end
+        in
 
-        | Ast.TEXPR_Array {sub; dim; _} -> failwith "not yet implemented"
-          
-
+        begin match init with
+        | None -> env, current_bb
+        | Some e -> 
+          let current_bb, res_init = translate_expression env current_bb e in
+          append_instruction current_bb @@ I_Move (r, res_init);
+          env, current_bb
         end
+
+        (* | Ast.TEXPR_Array {sub; dim = Some dim; _} ->failwith "xdd" *)
+          (* let current_bb, i = translate_expression env current_bb dim in
+          let r = allocate_register () in
+          append_instruction current_bb @@ I_NewArray (r, i);
+          begin match i with
+          | E_Int i32 ->
+            let f j bb = 
+              let bb, e = aux bb sub in
+              append_instruction bb @@ I_StoreArray(E_Reg r, j, e);
+              bb
+            in
+            List.iter f 
+          | E_Reg _ -> failwith "not impls"
+          end;
+          I_StoreArray(xs, i, e)
+          env, current_bb *)
+
+        (* | Ast.TEXPR_Array {sub; dim = None; _} -> failwith "xdd"
+        end *)
 
 
       | _ ->
