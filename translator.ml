@@ -226,8 +226,8 @@ module Make() = struct
         current_bb, E_Reg r
 
         (* EXPR_Relation *)
-        (* to wszystko jest zle :< *)
-        (* jak napiszemy poprawnie AND i OR w translate_condition to do poprawki *)
+        (* |  to wszystko jest zle :< *)
+        (* v  jak napiszemy poprawnie AND i OR w translate_condition to do poprawki *)
 
       | Ast.EXPR_Relation {op=Ast.RELOP_Eq; lhs; rhs; _} ->
         let r = allocate_register () in
@@ -299,6 +299,8 @@ module Make() = struct
   (*   and translate_expr_list (bb, l) expr = 
       let new_bb, e = translate_expression env bb expr 
       in new_bb, e::l *)
+
+
     and translate_lvalue env current_bb e_reg = function
       | Ast.LVALUE_Id {id; _} -> 
         let r = E_Reg (Environment.lookup_var id env) in
@@ -403,6 +405,29 @@ module Make() = struct
       | Ast.STMT_Assign {lhs; rhs; _} ->
         let current_bb, res_rhs = translate_expression env current_bb rhs in
         translate_lvalue env current_bb res_rhs lhs  
+
+      | Ast.STMT_VarDecl {var; init; _} ->
+        let id = Ast.identifier_of_var_declaration var in
+        let tp = Ast.type_expression_of_var_declaration var in
+        begin match tp with
+        | Ast.TEXPR_Int _
+        
+        | Ast.TEXPR_Bool _ ->
+          let r = allocate_register () in
+          let env = Environment.add_var id r env in
+          begin match init with
+          | None -> env, current_bb
+
+          | Some e -> 
+            let current_bb, res_init = translate_expression env current_bb e in
+            append_instruction current_bb @@ I_Move (r, res_init);
+            env, current_bb
+          end
+
+        | Ast.TEXPR_Array {sub; dim; _} -> failwith "not yet implemented"
+          
+
+        end
 
 
       | _ ->
