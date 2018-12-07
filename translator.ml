@@ -434,13 +434,14 @@ module Make() = struct
 
       | Ast.STMT_MultiVarDecl {vars; init = (Call {callee; arguments; _}); _} ->
         let p = Environment.lookup_proc callee env in
-        let r = allocate_register () in
 
         let aux_translate_mult_var (env, curr_bb, l) = function
           | None -> 
+            let r = allocate_register () in
             env, curr_bb, r::l
 
-          | Some (Ast.VarDecl {id; tp; _} as var) -> 
+          | Some (Ast.VarDecl {id; tp; _} as var) ->
+            let r = allocate_register () in 
             let env = Environment.add_var id r env in
             let curr_bb = alloc_array env curr_bb r var in
             env, curr_bb, r::l
@@ -450,12 +451,13 @@ module Make() = struct
           let new_bb, e = translate_expression env bb expr 
           in new_bb, e::l
         in 
+        
         let env, current_bb, reg_list = 
           List.fold_left aux_translate_mult_var (env, current_bb, []) vars in
         let current_bb, xs = 
           List.fold_left aux_translate_args (current_bb, []) arguments in
         append_instruction current_bb @@ I_Call (List.rev reg_list, p, List.rev xs, []);
-        env, current_bb (* nie dziala :c *)
+        env, current_bb
 
       
         
