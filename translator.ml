@@ -422,7 +422,7 @@ module Make() = struct
         let tp = Ast.type_expression_of_var_declaration var in
         let r = allocate_register () in
         let env = Environment.add_var id r env in
-        let current_bb = alloc_array env current_bb r var in
+        let current_bb = alloc_var_declaration env current_bb r tp in
         begin match init with
         | None -> env, current_bb
         | Some e -> 
@@ -443,7 +443,8 @@ module Make() = struct
           | Some (Ast.VarDecl {id; tp; _} as var) ->
             let r = allocate_register () in 
             let env = Environment.add_var id r env in
-            let curr_bb = alloc_array env curr_bb r var in
+            let curr_bb = 
+              alloc_var_declaration env curr_bb r (Ast.type_expression_of_var_declaration var) in
             env, curr_bb, r::l
         in
 
@@ -451,7 +452,7 @@ module Make() = struct
           let new_bb, e = translate_expression env bb expr 
           in new_bb, e::l
         in 
-        
+
         let env, current_bb, reg_list = 
           List.fold_left aux_translate_mult_var (env, current_bb, []) vars in
         let current_bb, xs = 
@@ -466,18 +467,29 @@ module Make() = struct
       List.fold_left (fun (env, bb) st -> translate_statement env bb st) 
         (env, current_bb) body
 
-    and alloc_array env current_bb r (Ast.VarDecl {id; tp; _}) =
-      let rec allocate_array dim bb = 
+    and alloc_var_declaration env current_bb r type_expr =
+      let allocate_array sub dim bb = 
         match dim with
         | None ->
           bb
         | Some dim ->
-          let bb, i = translate_expression env bb dim in
-          append_instruction bb @@ I_NewArray (r, i);
-          (* tu trzeba zmienic, zeby rekurencyjnie pod kazdy rejestr teraz wstawialo  *)
-          bb
-      in match tp with
-        | Ast.TEXPR_Array {sub; dim; _} -> allocate_array dim current_bb
+          let bb, size = translate_expression env bb dim in
+          append_instruction bb @@ I_NewArray (r, size);
+          match size with
+          | E_Int i32 -> 
+            let rec fun_aux curr_bb i =
+              if i = i32 then curr_bb 
+              else 
+                let r' = allocate_register () in 
+                let curr_bb = alloc_var_declaration env curr_bb r' sub in
+                append_instruction curr_bb @@ I_StoreArray (E_Reg r, E_Int i, E_Reg r');
+                fun_aux curr_bb (Int32.add i Int32.one)
+            in fun_aux bb @@ Int32.of_int 0
+
+          | _ -> failwith "size of array is not E_Int i32"
+
+      in match type_expr with
+        | Ast.TEXPR_Array {sub; dim; _} -> allocate_array sub dim current_bb
         | _ -> current_bb
 
 
